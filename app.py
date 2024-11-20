@@ -23,29 +23,44 @@ def create_app():
             queue_time = time.time() - queue_start_time
             run_start_time = time.time()
             pid = os.getpid()  # Get the PID of the actual processing thread
-            response = task_func()
-            run_time = time.time() - run_start_time
-            total_time = time.time() - queue_start_time
+            try:
+                response = task_func()
+                run_time = time.time() - run_start_time
+                total_time = time.time() - queue_start_time
 
-            response_data = {
-                "endpoint": response[1],
-                "code": response[2],
-                "id": data.get("id"),
-                "job_id": job_id,
-                "response": response[0] if response[2] == 200 else None,
-                "message": "success" if response[2] == 200 else response[0],
-                "pid": pid,
-                "queue_id": queue_id,
-                "run_time": round(run_time, 3),
-                "queue_time": round(queue_time, 3),
-                "total_time": round(total_time, 3),
-                "queue_length": task_queue.qsize(),
-                "build_number": BUILD_NUMBER  # Add build number to response
-            }
+                response_data = {
+                    "endpoint": response[1],
+                    "code": response[2],
+                    "id": data.get("id"),
+                    "job_id": job_id,
+                    "response": response[0] if response[2] == 200 else None,
+                    "message": "success" if response[2] == 200 else response[0],
+                    "pid": pid,
+                    "queue_id": queue_id,
+                    "run_time": round(run_time, 3),
+                    "queue_time": round(queue_time, 3),
+                    "total_time": round(total_time, 3),
+                    "queue_length": task_queue.qsize(),
+                    "build_number": BUILD_NUMBER  # Add build number to response
+                }
 
-            send_webhook(data.get("webhook_url"), response_data)
-
-            task_queue.task_done()
+                send_webhook(data.get("webhook_url"), response_data)
+            except Exception as e:
+                response_data = {
+                    "endpoint": "/queue_error",
+                    "code": 500,
+                    "id": data.get("id"),
+                    "job_id": job_id,
+                    "message": f"Task failed: {str(e)}",
+                    "pid": pid,
+                    "queue_id": queue_id,
+                    "queue_time": round(queue_time, 3),
+                    "queue_length": task_queue.qsize(),
+                    "build_number": BUILD_NUMBER
+                }
+                send_webhook(data.get("webhook_url"), response_data)
+            finally:
+                task_queue.task_done()
 
     # Start the queue processing in a separate thread
     threading.Thread(target=process_queue, daemon=True).start()
@@ -60,7 +75,6 @@ def create_app():
                 start_time = time.time()
                 
                 if bypass_queue or 'webhook_url' not in data:
-                    
                     response = f(job_id=job_id, data=data, *args, **kwargs)
                     run_time = time.time() - start_time
                     return {
@@ -115,10 +129,13 @@ def create_app():
     from routes.audio_mixing import audio_mixing_bp
     from routes.gdrive_upload import gdrive_upload_bp
     from routes.authenticate import auth_bp
-    from routes.caption_video import caption_bp 
     from routes.extract_keyframes import extract_keyframes_bp
     from routes.image_to_video import image_to_video_bp
-    
+
+    # Versioned blueprints
+    from routes.v1.ffmpeg_compose import v1_ffmpeg_compose_bp
+    from routes.v1.transcribe_media import v1_transcribe_media_bp
+    from routes.v1.caption_video import v1_caption_video  # New caption video blueprint
 
     # Register blueprints
     app.register_blueprint(convert_bp)
@@ -127,19 +144,16 @@ def create_app():
     app.register_blueprint(audio_mixing_bp)
     app.register_blueprint(gdrive_upload_bp)
     app.register_blueprint(auth_bp)
-    app.register_blueprint(caption_bp)
     app.register_blueprint(extract_keyframes_bp)
     app.register_blueprint(image_to_video_bp)
-    
 
-    # version 1.0
-    from routes.v1.ffmpeg_compose import v1_ffmpeg_compose_bp
-    from routes.v1.transcribe_media import v1_transcribe_media_bp
-
+    # Register versioned blueprints
     app.register_blueprint(v1_ffmpeg_compose_bp)
     app.register_blueprint(v1_transcribe_media_bp)
+    app.register_blueprint(v1_caption_video)  # Register the v1 caption video blueprint
 
     return app
+
 
 app = create_app()
 
