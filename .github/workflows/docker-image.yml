@@ -11,7 +11,7 @@ jobs:
 
     env:
       REGION: us-central1  # Your Artifact Registry region
-      PROJECT_ID: nca-toolkit-441121  # Your Google Cloud project ID
+      PROJECT_ID: nca-toolkit-441121
       REPOSITORY_NAME: my-docker-repo  # Your Artifact Registry repository name
       SERVICE_NAME: no-code-architects-toolkit  # Your Cloud Run service name
 
