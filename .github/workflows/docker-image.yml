@@ -10,9 +10,10 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      REGION: us-central1  # Replace with your Artifact Registry region
-      REPOSITORY_NAME: my-docker-repo  # Replace with your Artifact Registry repository name
-      SERVICE_NAME: no-code-architects-toolkit  # Replace with your Cloud Run service name
+      REGION: us-central1  # Your Artifact Registry region
+      PROJECT_ID: nca-toolkit-441121  # Your Google Cloud project ID
+      REPOSITORY_NAME: my-docker-repo  # Your Artifact Registry repository name
+      SERVICE_NAME: no-code-architects-toolkit  # Your Cloud Run service name
 
     steps:
     - name: Checkout Code
@@ -44,12 +45,12 @@ jobs:
 
     - name: Build and Push Docker Image
       run: |
-        docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY_NAME }}/${{ env.SERVICE_NAME }}:latest .
-        docker push ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY_NAME }}/${{ env.SERVICE_NAME }}:latest
+        docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY_NAME }}/${{ env.SERVICE_NAME }}:latest .
+        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY_NAME }}/${{ env.SERVICE_NAME }}:latest
 
     - name: Deploy to Cloud Run
       run: |
         gcloud run deploy ${{ env.SERVICE_NAME }} \
-          --image ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY_NAME }}/${{ env.SERVICE_NAME }}:latest \
+          --image ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY_NAME }}/${{ env.SERVICE_NAME }}:latest \
           --region $REGION \
           --platform managed
