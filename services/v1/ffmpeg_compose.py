@@ -2,10 +2,15 @@ import os
 import subprocess
 import json
 import logging
+from google.cloud import storage
 from services.file_management import download_file
 
-STORAGE_PATH = "/tmp/"
 logger = logging.getLogger(__name__)
+
+# Define storage path
+STORAGE_PATH = os.environ.get("TEMP_DIR", "/tmp/")
+if not os.path.exists(STORAGE_PATH):
+    os.makedirs(STORAGE_PATH)
 
 
 def get_extension_from_format(format_name):
@@ -31,34 +36,18 @@ def get_extension_from_format(format_name):
         'flac': 'flac',
         'ogg': 'ogg'
     }
-    return format_to_extension.get(format_name.lower(), 'mp4')  # Default to MP4
+    return format_to_extension.get(format_name.lower(), 'mp4')
 
 
-def get_metadata(filename, metadata_requests, job_id):
+def get_metadata(filename, metadata_requests):
     """
     Retrieve metadata from a media file using FFmpeg and FFprobe.
     """
     metadata = {}
-    if metadata_requests.get('thumbnail'):
-        thumbnail_filename = f"{os.path.splitext(filename)[0]}_thumbnail.jpg"
-        thumbnail_command = [
-            'ffmpeg',
-            '-i', filename,
-            '-vf', 'select=eq(n\,0)',
-            '-vframes', '1',
-            thumbnail_filename
-        ]
-        try:
-            subprocess.run(thumbnail_command, check=True, capture_output=True, text=True)
-            if os.path.exists(thumbnail_filename):
-                metadata['thumbnail'] = thumbnail_filename
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Thumbnail generation failed for {filename}: {e.stderr}")
-
     if metadata_requests.get('filesize'):
         metadata['filesize'] = os.path.getsize(filename)
 
-    if metadata_requests.get('encoder') or metadata_requests.get('duration') or metadata_requests.get('bitrate'):
+    if metadata_requests.get('duration') or metadata_requests.get('bitrate'):
         ffprobe_command = [
             'ffprobe',
             '-v', 'quiet',
@@ -69,20 +58,24 @@ def get_metadata(filename, metadata_requests, job_id):
         ]
         result = subprocess.run(ffprobe_command, capture_output=True, text=True)
         probe_data = json.loads(result.stdout)
-        
+
         if metadata_requests.get('duration'):
             metadata['duration'] = float(probe_data['format']['duration'])
         if metadata_requests.get('bitrate'):
             metadata['bitrate'] = int(probe_data['format']['bit_rate'])
-        if metadata_requests.get('encoder'):
-            metadata['encoder'] = {}
-            for stream in probe_data['streams']:
-                if stream['codec_type'] == 'video':
-                    metadata['encoder']['video'] = stream.get('codec_name', 'unknown')
-                elif stream['codec_type'] == 'audio':
-                    metadata['encoder']['audio'] = stream.get('codec_name', 'unknown')
 
     return metadata
+
+
+def upload_file_to_gcs(local_path, bucket_name, destination_path):
+    """
+    Upload a file to Google Cloud Storage.
+    """
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(destination_path)
+    blob.upload_from_filename(local_path)
+    return f"gs://{bucket_name}/{destination_path}"
 
 
 def process_ffmpeg_compose(data, job_id):
@@ -122,8 +115,6 @@ def process_ffmpeg_compose(data, job_id):
                 break
 
         extension = get_extension_from_format(format_name) if format_name else 'mp4'
-
-        # Add sequence pattern for image2 format
         if format_name == "image2":
             output_filename = os.path.join(STORAGE_PATH, f"{job_id}_output_{i}_%03d.{extension}")
         else:
@@ -145,16 +136,5 @@ def process_ffmpeg_compose(data, job_id):
         logger.error(f"FFmpeg command failed: {e.stderr}")
         raise Exception(f"FFmpeg command failed: {e.stderr}")
 
-    # Clean up input files
-    for input_data in data["inputs"]:
-        input_path = os.path.join(STORAGE_PATH, os.path.basename(input_data["file_url"]))
-        if os.path.exists(input_path):
-            os.remove(input_path)
+    return output_filenames
 
-    # Get metadata if requested
-    metadata = []
-    if data.get("metadata"):
-        for output_filename in output_filenames:
-            metadata.append(get_metadata(output_filename, data["metadata"], job_id))
-
-    return output_filenames, metadata
