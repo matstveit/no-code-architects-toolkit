@@ -1,10 +1,9 @@
 import os
 import logging
 from flask import Blueprint, request, jsonify
-from app_utils import *
-from services.v1.ffmpeg_compose import process_ffmpeg_compose
+from services.v1.ffmpeg_compose import process_ffmpeg_compose, upload_file_to_gcs
 from services.authentication import authenticate
-from services.cloud_storage import upload_file
+from app_utils import validate_payload, queue_task_wrapper
 
 v1_ffmpeg_compose_bp = Blueprint('v1_ffmpeg_compose', __name__)
 logger = logging.getLogger(__name__)
@@ -81,10 +80,8 @@ logger = logging.getLogger(__name__)
         "metadata": {
             "type": "object",
             "properties": {
-                "thumbnail": {"type": "boolean"},
                 "filesize": {"type": "boolean"},
-                "duration": {"type": "boolean"},
-                "bitrate": {"type": "boolean"}
+                "duration": {"type": "boolean"}
             }
         },
         "webhook_url": {"type": "string", "format": "uri"},
@@ -94,37 +91,18 @@ logger = logging.getLogger(__name__)
     "additionalProperties": False
 })
 @queue_task_wrapper(bypass_queue=False)
-def ffmpeg_api(job_id, data):
-    logger.info(f"Job {job_id}: Received flexible FFmpeg request")
+def ffmpeg_compose_api(job_id, data):
+    logger.info(f"Job {job_id}: Received FFmpeg request")
 
     try:
-        output_filenames, metadata = process_ffmpeg_compose(data, job_id)
-        
-        # Upload output files to GCP and create result array
-        output_urls = []
-        for i, output_filename in enumerate(output_filenames):
-            if os.path.exists(output_filename):
-                upload_url = upload_file(output_filename)
-                output_info = {"file_url": upload_url}
-                
-                if metadata and i < len(metadata):
-                    output_metadata = metadata[i]
-                    if 'thumbnail' in output_metadata:
-                        thumbnail_path = output_metadata['thumbnail']
-                        if os.path.exists(thumbnail_path):
-                            thumbnail_url = upload_file(thumbnail_path)
-                            del output_metadata['thumbnail']
-                            output_metadata['thumbnail_url'] = thumbnail_url
-                            os.remove(thumbnail_path)  # Clean up local thumbnail file
-                    output_info.update(output_metadata)
-                
-                output_urls.append(output_info)
-                os.remove(output_filename)  # Clean up local output file after upload
-            else:
-                raise Exception(f"Expected output file {output_filename} not found")
+        output_filenames = process_ffmpeg_compose(data, job_id)
+        bucket_name = os.environ.get("GCP_BUCKET_NAME")
+        uploaded_files = [
+            upload_file_to_gcs(file, bucket_name, f"{job_id}/{os.path.basename(file)}")
+            for file in output_filenames
+        ]
 
-        return output_urls, "/v1/ffmpeg/compose", 200
-        
+        return {"uploaded_files": uploaded_files}, "/v1/ffmpeg/compose", 200
     except Exception as e:
         logger.error(f"Job {job_id}: Error processing FFmpeg request - {str(e)}")
         return str(e), "/v1/ffmpeg/compose", 500
