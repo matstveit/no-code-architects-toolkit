@@ -1,6 +1,6 @@
 import os
 import logging
-from flask import Blueprint, request, jsonify
+from flask import Blueprint
 from services.v1.ffmpeg_compose import process_ffmpeg_compose, upload_file_to_gcs
 from services.authentication import authenticate
 from app_utils import validate_payload, queue_task_wrapper
@@ -96,9 +96,8 @@ def ffmpeg_compose_api(job_id, data):
 
     try:
         output_filenames = process_ffmpeg_compose(data, job_id)
-        bucket_name = os.environ.get("GCP_BUCKET_NAME")
         uploaded_files = [
-            upload_file_to_gcs(file, bucket_name, f"{job_id}/{os.path.basename(file)}")
+            upload_file_to_gcs(file, f"{job_id}/{os.path.basename(file)}")
             for file in output_filenames
         ]
 
