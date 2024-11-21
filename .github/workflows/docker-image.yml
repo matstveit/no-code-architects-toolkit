@@ -10,8 +10,9 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      REGION: us-central1  # Replace with your desired region
-      SERVICE_NAME: no-code-architects-toolkit  # Replace with your service name
+      REGION: us-central1  # Replace with your Artifact Registry region
+      REPOSITORY_NAME: my-docker-repo  # Replace with your Artifact Registry repository name
+      SERVICE_NAME: no-code-architects-toolkit  # Replace with your Cloud Run service name
 
     steps:
     - name: Checkout Code
@@ -37,17 +38,18 @@ jobs:
         project_id: ${{ secrets.GCP_PROJECT_ID }}
         service_account_key: ${{ secrets.GCP_SA_KEY }}
 
+    - name: Authenticate Docker with Google Cloud
+      run: |
+        gcloud auth configure-docker --quiet
+
     - name: Build and Push Docker Image
       run: |
-        docker build -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.SERVICE_NAME }}:latest .
-        docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.SERVICE_NAME }}:latest
-
-    - name: Log Docker Image Info
-      run: docker images | grep ${{ env.SERVICE_NAME }}
+        docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY_NAME }}/${{ env.SERVICE_NAME }}:latest .
+        docker push ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY_NAME }}/${{ env.SERVICE_NAME }}:latest
 
     - name: Deploy to Cloud Run
       run: |
         gcloud run deploy ${{ env.SERVICE_NAME }} \
-          --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.SERVICE_NAME }}:latest \
+          --image ${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY_NAME }}/${{ env.SERVICE_NAME }}:latest \
           --region $REGION \
           --platform managed
