@@ -41,7 +41,8 @@ jobs:
 
     - name: Authenticate Docker with Google Cloud
       run: |
-        gcloud auth configure-docker --quiet
+        gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
 
     - name: Build and Push Docker Image
       run: |
