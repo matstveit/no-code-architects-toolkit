@@ -2,7 +2,6 @@ import os
 import subprocess
 import json
 import logging
-from glob import glob
 from google.cloud import storage
 from services.file_management import download_file
 
@@ -19,11 +18,7 @@ if not GCP_BUCKET_NAME:
     logger.error("GCP_BUCKET_NAME environment variable is not set.")
     raise Exception("GCP_BUCKET_NAME environment variable is required.")
 
-
 def get_extension_from_format(format_name):
-    """
-    Map format names to file extensions.
-    """
     format_to_extension = {
         'mp4': 'mp4',
         'mov': 'mov',
@@ -45,11 +40,7 @@ def get_extension_from_format(format_name):
     }
     return format_to_extension.get(format_name.lower(), 'mp4')
 
-
 def get_metadata(filename, metadata_requests):
-    """
-    Retrieve metadata from a media file using FFmpeg and FFprobe.
-    """
     metadata = {}
     if metadata_requests.get('filesize'):
         metadata['filesize'] = os.path.getsize(filename)
@@ -73,7 +64,6 @@ def get_metadata(filename, metadata_requests):
 
     return metadata
 
-
 def upload_file_to_gcs(local_path, destination_path):
     """
     Upload a file to Google Cloud Storage.
@@ -82,9 +72,7 @@ def upload_file_to_gcs(local_path, destination_path):
     bucket = client.bucket(GCP_BUCKET_NAME)
     blob = bucket.blob(destination_path)
     blob.upload_from_filename(local_path)
-    blob.make_public()  # Ensure the file is publicly accessible
-    return blob.public_url
-
+    return f"gs://{GCP_BUCKET_NAME}/{destination_path}"
 
 def process_ffmpeg_compose(data, job_id):
     """
@@ -107,8 +95,6 @@ def process_ffmpeg_compose(data, job_id):
                 if "argument" in option and option["argument"] is not None:
                     command.append(str(option["argument"]))
         input_path = download_file(input_data["file_url"], STORAGE_PATH)
-        if not os.path.exists(input_path):
-            raise Exception(f"Input file not found: {input_path}")
         command.extend(["-i", input_path])
 
     # Add filters
@@ -125,10 +111,8 @@ def process_ffmpeg_compose(data, job_id):
                 break
 
         extension = get_extension_from_format(format_name) if format_name else 'mp4'
-
         if format_name == "image2":
-            pattern = os.path.join(STORAGE_PATH, f"{job_id}_output_{i}_%03d.{extension}")
-            output_filename = pattern
+            output_filename = os.path.join(STORAGE_PATH, f"{job_id}_output_{i}_%03d.{extension}")
         else:
             output_filename = os.path.join(STORAGE_PATH, f"{job_id}_output_{i}.{extension}")
 
@@ -140,33 +124,23 @@ def process_ffmpeg_compose(data, job_id):
                 command.append(str(option["argument"]))
         command.append(output_filename)
 
-    # Log and execute FFmpeg command
-    logger.info(f"Executing FFmpeg command: {' '.join(command)}")
+    # Execute FFmpeg command
     try:
+        logger.info(f"Executing FFmpeg command: {' '.join(command)}")
         subprocess.run(command, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
         logger.error(f"FFmpeg command failed: {e.stderr}")
         raise Exception(f"FFmpeg command failed: {e.stderr}")
 
-    # Collect and validate outputs
-    generated_files = []
-    for file in output_filenames:
-        if "%03d" in file:
-            pattern = file.replace("%03d", "*")
-            generated_files.extend(glob(pattern))
-        elif os.path.exists(file):
-            generated_files.append(file)
-
-    if not generated_files:
-        logger.error(f"No output files generated.")
-        raise Exception("No output files created.")
-
     # Upload files to GCS
     uploaded_files = []
-    for file in generated_files:
-        destination_path = f"{job_id}/{os.path.basename(file)}"
-        uploaded_url = upload_file_to_gcs(file, destination_path)
-        uploaded_files.append(uploaded_url)
-        os.remove(file)  # Clean up local file after upload
+    for local_path in output_filenames:
+        if os.path.exists(local_path):
+            destination_path = os.path.basename(local_path)
+            uploaded_files.append(upload_file_to_gcs(local_path, destination_path))
+            os.remove(local_path)  # Clean up local file
+        else:
+            logger.error(f"Output file {local_path} does not exist.")
+            raise Exception(f"Output file {local_path} does not exist.")
 
     return uploaded_files
