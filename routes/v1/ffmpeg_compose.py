@@ -4,7 +4,6 @@ from flask import Blueprint, request, jsonify
 from app_utils import *
 from services.v1.ffmpeg_compose import process_ffmpeg_compose
 from services.authentication import authenticate
-from services.cloud_storage import upload_file
 
 v1_ffmpeg_compose_bp = Blueprint('v1_ffmpeg_compose', __name__)
 logger = logging.getLogger(__name__)
