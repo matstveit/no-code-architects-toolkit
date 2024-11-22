@@ -1,68 +1,22 @@
 import os
 import subprocess
-import json
 import logging
 from google.cloud import storage
 from services.file_management import download_file
 
+# Initialize Logger
 logger = logging.getLogger(__name__)
 
-# Define storage path
+# Define temporary storage path
 STORAGE_PATH = os.environ.get("TEMP_DIR", "/tmp/")
 if not os.path.exists(STORAGE_PATH):
     os.makedirs(STORAGE_PATH)
 
-# Get the bucket name from the environment variable
+# Bucket name for uploads
 GCP_BUCKET_NAME = os.environ.get("GCP_BUCKET_NAME")
 if not GCP_BUCKET_NAME:
     logger.error("GCP_BUCKET_NAME environment variable is not set.")
-    raise Exception("GCP_BUCKET_NAME environment variable is required.")
-
-def get_extension_from_format(format_name):
-    format_to_extension = {
-        'mp4': 'mp4',
-        'mov': 'mov',
-        'avi': 'avi',
-        'mkv': 'mkv',
-        'webm': 'webm',
-        'gif': 'gif',
-        'apng': 'apng',
-        'jpg': 'jpg',
-        'jpeg': 'jpg',
-        'png': 'png',
-        'image2': 'png',
-        'rawvideo': 'raw',
-        'mp3': 'mp3',
-        'wav': 'wav',
-        'aac': 'aac',
-        'flac': 'flac',
-        'ogg': 'ogg'
-    }
-    return format_to_extension.get(format_name.lower(), 'mp4')
-
-def get_metadata(filename, metadata_requests):
-    metadata = {}
-    if metadata_requests.get('filesize'):
-        metadata['filesize'] = os.path.getsize(filename)
-
-    if metadata_requests.get('duration') or metadata_requests.get('bitrate'):
-        ffprobe_command = [
-            'ffprobe',
-            '-v', 'quiet',
-            '-print_format', 'json',
-            '-show_format',
-            '-show_streams',
-            filename
-        ]
-        result = subprocess.run(ffprobe_command, capture_output=True, text=True)
-        probe_data = json.loads(result.stdout)
-
-        if metadata_requests.get('duration'):
-            metadata['duration'] = float(probe_data['format']['duration'])
-        if metadata_requests.get('bitrate'):
-            metadata['bitrate'] = int(probe_data['format']['bit_rate'])
-
-    return metadata
+    raise ValueError("GCP_BUCKET_NAME environment variable is required.")
 
 def upload_file_to_gcs(local_path, destination_path):
     """
@@ -72,60 +26,55 @@ def upload_file_to_gcs(local_path, destination_path):
     bucket = client.bucket(GCP_BUCKET_NAME)
     blob = bucket.blob(destination_path)
     blob.upload_from_filename(local_path)
-    return f"gs://{GCP_BUCKET_NAME}/{destination_path}"
+    blob.make_public()  # Optional: Make public for external access
+    return blob.public_url
 
 def process_ffmpeg_compose(data, job_id):
     """
-    Process FFmpeg composition requests, handling inputs, filters, and outputs.
+    Process FFmpeg jobs: handle inputs, filters, and outputs.
     """
-    output_filenames = []
+    output_files = []
     command = ["ffmpeg"]
 
-    # Add global options
+    # Process global options
     for option in data.get("global_options", []):
         command.append(option["option"])
-        if "argument" in option and option["argument"] is not None:
+        if "argument" in option and option["argument"]:
             command.append(str(option["argument"]))
 
     # Add inputs
-    for input_data in data["inputs"]:
-        if "options" in input_data:
-            for option in input_data["options"]:
-                command.append(option["option"])
-                if "argument" in option and option["argument"] is not None:
-                    command.append(str(option["argument"]))
-        input_path = download_file(input_data["file_url"], STORAGE_PATH)
+    for input_item in data["inputs"]:
+        file_url = input_item["file_url"]
+        input_path = download_file(file_url, STORAGE_PATH)
         if not os.path.exists(input_path):
-            logger.error(f"Input file {input_path} does not exist or is inaccessible.")
-            raise Exception(f"Input file {input_path} does not exist or is inaccessible.")
+            logger.error(f"Input file {input_path} could not be downloaded or does not exist.")
+            raise FileNotFoundError(f"Input file {input_path} not found.")
         command.extend(["-i", input_path])
 
     # Add filters
-    if data.get("filters"):
+    if "filters" in data:
         filter_complex = ";".join(filter_obj["filter"] for filter_obj in data["filters"])
         command.extend(["-filter_complex", filter_complex])
 
     # Add outputs
     for i, output in enumerate(data["outputs"]):
-        format_name = None
-        for option in output["options"]:
-            if option["option"] == "-f":
-                format_name = option.get("argument")
-                break
+        format_option = next((opt for opt in output["options"] if opt["option"] == "-f"), None)
+        format_name = format_option["argument"] if format_option else "mp4"
+        file_extension = format_name if format_name != "image2" else "png"
 
-        extension = get_extension_from_format(format_name) if format_name else 'mp4'
+        # Image sequences need a pattern
         if format_name == "image2":
-            output_filename = os.path.join(STORAGE_PATH, f"{job_id}_output_{i}_%03d.{extension}")
+            output_path = os.path.join(STORAGE_PATH, f"{job_id}_output_{i}_%03d.{file_extension}")
         else:
-            output_filename = os.path.join(STORAGE_PATH, f"{job_id}_output_{i}.{extension}")
+            output_path = os.path.join(STORAGE_PATH, f"{job_id}_output_{i}.{file_extension}")
+        output_files.append(output_path)
 
-        output_filenames.append(output_filename)
-
-        for option in output["options"]:
-            command.append(option["option"])
-            if "argument" in option and option["argument"] is not None:
-                command.append(str(option["argument"]))
-        command.append(output_filename)
+        # Add output options
+        for opt in output["options"]:
+            command.append(opt["option"])
+            if "argument" in opt and opt["argument"]:
+                command.append(str(opt["argument"]))
+        command.append(output_path)
 
     # Execute FFmpeg command
     try:
@@ -135,17 +84,17 @@ def process_ffmpeg_compose(data, job_id):
         if result.stderr:
             logger.error(f"FFmpeg stderr: {result.stderr}")
     except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg command failed: {e.stderr}")
-        raise Exception(f"FFmpeg command failed: {e.stderr}")
+        logger.error(f"FFmpeg failed with error: {e.stderr}")
+        raise RuntimeError(f"FFmpeg failed: {e.stderr}")
 
-    # Verify and upload files to GCS
+    # Validate and upload outputs
     uploaded_files = []
-    for local_path in output_filenames:
+    for local_path in output_files:
         if not os.path.exists(local_path):
-            logger.error(f"Output file {local_path} does not exist.")
-            raise Exception(f"Output file {local_path} does not exist.")
-        destination_path = os.path.basename(local_path)
-        uploaded_files.append(upload_file_to_gcs(local_path, destination_path))
-        os.remove(local_path)  # Clean up local file
+            logger.error(f"Expected output file {local_path} does not exist.")
+            raise FileNotFoundError(f"Expected output file {local_path} does not exist.")
+        gcs_path = upload_file_to_gcs(local_path, os.path.basename(local_path))
+        uploaded_files.append(gcs_path)
+        os.remove(local_path)
 
     return uploaded_files
