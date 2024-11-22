@@ -19,6 +19,9 @@ if not GCP_BUCKET_NAME:
     raise Exception("GCP_BUCKET_NAME environment variable is required.")
 
 def get_extension_from_format(format_name):
+    """
+    Map format names to file extensions.
+    """
     format_to_extension = {
         'mp4': 'mp4',
         'mov': 'mov',
@@ -41,6 +44,9 @@ def get_extension_from_format(format_name):
     return format_to_extension.get(format_name.lower(), 'mp4')
 
 def get_metadata(filename, metadata_requests):
+    """
+    Retrieve metadata from a media file using FFprobe.
+    """
     metadata = {}
     if metadata_requests.get('filesize'):
         metadata['filesize'] = os.path.getsize(filename)
@@ -66,13 +72,19 @@ def get_metadata(filename, metadata_requests):
 
 def upload_file_to_gcs(local_path, destination_path):
     """
-    Upload a file to Google Cloud Storage.
+    Upload a file to Google Cloud Storage and return the public URL.
     """
     client = storage.Client()
     bucket = client.bucket(GCP_BUCKET_NAME)
     blob = bucket.blob(destination_path)
-    blob.upload_from_filename(local_path)
-    return f"gs://{GCP_BUCKET_NAME}/{destination_path}"
+    try:
+        blob.upload_from_filename(local_path)
+        public_url = f"https://storage.googleapis.com/{GCP_BUCKET_NAME}/{destination_path}"
+        logger.info(f"Uploaded file to {public_url}")
+        return public_url
+    except Exception as e:
+        logger.error(f"Failed to upload {local_path} to {destination_path}: {e}")
+        raise
 
 def process_ffmpeg_compose(data, job_id):
     """
