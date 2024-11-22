@@ -92,6 +92,8 @@ logger = logging.getLogger(__name__)
     "required": ["inputs", "outputs"],
     "additionalProperties": False
 })
+
+@queue_task_wrapper(bypass_queue=False)
 def ffmpeg_api(job_id, data):
     logger.info(f"Job {job_id}: Received FFmpeg request")
 
