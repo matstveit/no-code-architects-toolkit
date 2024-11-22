@@ -1,9 +1,10 @@
 import os
 import logging
-from flask import Blueprint
-from services.v1.ffmpeg_compose import process_ffmpeg_compose, upload_file_to_gcs
+from flask import Blueprint, request, jsonify
+from app_utils import *
+from services.v1.ffmpeg_compose import process_ffmpeg_compose
 from services.authentication import authenticate
-from app_utils import validate_payload, queue_task_wrapper
+from services.cloud_storage import upload_file
 
 v1_ffmpeg_compose_bp = Blueprint('v1_ffmpeg_compose', __name__)
 logger = logging.getLogger(__name__)
@@ -81,7 +82,8 @@ logger = logging.getLogger(__name__)
             "type": "object",
             "properties": {
                 "filesize": {"type": "boolean"},
-                "duration": {"type": "boolean"}
+                "duration": {"type": "boolean"},
+                "bitrate": {"type": "boolean"}
             }
         },
         "webhook_url": {"type": "string", "format": "uri"},
@@ -91,17 +93,11 @@ logger = logging.getLogger(__name__)
     "additionalProperties": False
 })
 @queue_task_wrapper(bypass_queue=False)
-def ffmpeg_compose_api(job_id, data):
+def ffmpeg_api(job_id, data):
     logger.info(f"Job {job_id}: Received FFmpeg request")
-
     try:
-        output_filenames = process_ffmpeg_compose(data, job_id)
-        uploaded_files = [
-            upload_file_to_gcs(file, f"{job_id}/{os.path.basename(file)}")
-            for file in output_filenames
-        ]
-
-        return {"uploaded_files": uploaded_files}, "/v1/ffmpeg/compose", 200
+        uploaded_files = process_ffmpeg_compose(data, job_id)
+        return jsonify({"output_files": uploaded_files}), 200
     except Exception as e:
         logger.error(f"Job {job_id}: Error processing FFmpeg request - {str(e)}")
-        return str(e), "/v1/ffmpeg/compose", 500
+        return jsonify({"error": str(e)}), 500
