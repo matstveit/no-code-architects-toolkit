@@ -74,7 +74,8 @@ def upload_file_to_gcs(local_path, destination_path):
     bucket = client.bucket(GCP_BUCKET_NAME)
     blob = bucket.blob(destination_path)
     blob.upload_from_filename(local_path)
-    return f"gs://{GCP_BUCKET_NAME}/{destination_path}"
+    blob.make_public()  # Ensure the file is publicly accessible
+    return blob.public_url
 
 
 def process_ffmpeg_compose(data, job_id):
