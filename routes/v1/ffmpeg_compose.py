@@ -4,7 +4,6 @@ from flask import Blueprint, request, jsonify
 from app_utils import *
 from services.v1.ffmpeg_compose import process_ffmpeg_compose
 from services.authentication import authenticate
-from services.cloud_storage import upload_file
 
 v1_ffmpeg_compose_bp = Blueprint('v1_ffmpeg_compose', __name__)
 logger = logging.getLogger(__name__)
@@ -85,22 +84,19 @@ logger = logging.getLogger(__name__)
                 "duration": {"type": "boolean"},
                 "bitrate": {"type": "boolean"}
             }
-        },
-        "webhook_url": {"type": "string", "format": "uri"},
-        "id": {"type": "string"}
+        }
     },
     "required": ["inputs", "outputs"],
     "additionalProperties": False
 })
-
-@queue_task_wrapper(bypass_queue=False)
-def ffmpeg_api(job_id, data):
+def ffmpeg_api():
+    job_id = request.headers.get('X-Job-ID', 'unknown-job-id')
     logger.info(f"Job {job_id}: Received FFmpeg request")
 
     try:
+        data = request.get_json()
         output_files = process_ffmpeg_compose(data, job_id)
-        response = {"files": output_files}
-        return jsonify(response), 200
+        return jsonify({"outputs": output_files}), 200
     except Exception as e:
         logger.error(f"Error processing FFmpeg request: {str(e)}")
         return jsonify({"error": str(e)}), 500
