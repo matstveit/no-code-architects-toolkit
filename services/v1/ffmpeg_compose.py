@@ -19,9 +19,6 @@ if not GCP_BUCKET_NAME:
     raise Exception("GCP_BUCKET_NAME environment variable is required.")
 
 def get_extension_from_format(format_name):
-    """
-    Map format names to file extensions.
-    """
     format_to_extension = {
         'mp4': 'mp4',
         'mov': 'mov',
@@ -44,9 +41,6 @@ def get_extension_from_format(format_name):
     return format_to_extension.get(format_name.lower(), 'mp4')
 
 def get_metadata(filename, metadata_requests):
-    """
-    Retrieve metadata from a media file using FFprobe.
-    """
     metadata = {}
     if metadata_requests.get('filesize'):
         metadata['filesize'] = os.path.getsize(filename)
@@ -72,19 +66,13 @@ def get_metadata(filename, metadata_requests):
 
 def upload_file_to_gcs(local_path, destination_path):
     """
-    Upload a file to Google Cloud Storage and return the public URL.
+    Upload a file to Google Cloud Storage.
     """
     client = storage.Client()
     bucket = client.bucket(GCP_BUCKET_NAME)
     blob = bucket.blob(destination_path)
-    try:
-        blob.upload_from_filename(local_path)
-        public_url = f"https://storage.googleapis.com/{GCP_BUCKET_NAME}/{destination_path}"
-        logger.info(f"Uploaded file to {public_url}")
-        return public_url
-    except Exception as e:
-        logger.error(f"Failed to upload {local_path} to {destination_path}: {e}")
-        raise
+    blob.upload_from_filename(local_path)
+    return f"gs://{GCP_BUCKET_NAME}/{destination_path}"
 
 def process_ffmpeg_compose(data, job_id):
     """
@@ -107,6 +95,9 @@ def process_ffmpeg_compose(data, job_id):
                 if "argument" in option and option["argument"] is not None:
                     command.append(str(option["argument"]))
         input_path = download_file(input_data["file_url"], STORAGE_PATH)
+        if not os.path.exists(input_path):
+            logger.error(f"Input file {input_path} does not exist or is inaccessible.")
+            raise Exception(f"Input file {input_path} does not exist or is inaccessible.")
         command.extend(["-i", input_path])
 
     # Add filters
@@ -139,20 +130,22 @@ def process_ffmpeg_compose(data, job_id):
     # Execute FFmpeg command
     try:
         logger.info(f"Executing FFmpeg command: {' '.join(command)}")
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        logger.info(f"FFmpeg output: {result.stdout}")
+        if result.stderr:
+            logger.error(f"FFmpeg stderr: {result.stderr}")
     except subprocess.CalledProcessError as e:
         logger.error(f"FFmpeg command failed: {e.stderr}")
         raise Exception(f"FFmpeg command failed: {e.stderr}")
 
-    # Upload files to GCS
+    # Verify and upload files to GCS
     uploaded_files = []
     for local_path in output_filenames:
-        if os.path.exists(local_path):
-            destination_path = os.path.basename(local_path)
-            uploaded_files.append(upload_file_to_gcs(local_path, destination_path))
-            os.remove(local_path)  # Clean up local file
-        else:
+        if not os.path.exists(local_path):
             logger.error(f"Output file {local_path} does not exist.")
             raise Exception(f"Output file {local_path} does not exist.")
+        destination_path = os.path.basename(local_path)
+        uploaded_files.append(upload_file_to_gcs(local_path, destination_path))
+        os.remove(local_path)  # Clean up local file
 
     return uploaded_files
