@@ -1,108 +1,142 @@
 import os
 import subprocess
-import logging
-import glob
-from google.cloud import storage
+import json
 from services.file_management import download_file
 
-logger = logging.getLogger(__name__)
+STORAGE_PATH = "/tmp/"
 
-STORAGE_PATH = os.environ.get("TEMP_DIR", "/tmp/")
-if not os.path.exists(STORAGE_PATH):
-    os.makedirs(STORAGE_PATH)
+def get_extension_from_format(format_name):
+    # Mapping of common format names to file extensions
+    format_to_extension = {
+        'mp4': 'mp4',
+        'mov': 'mov',
+        'avi': 'avi',
+        'mkv': 'mkv',
+        'webm': 'webm',
+        'gif': 'gif',
+        'apng': 'apng',
+        'jpg': 'jpg',
+        'jpeg': 'jpg',
+        'png': 'png',
+        'image2': 'png',  # Assume png for image2 format
+        'rawvideo': 'raw',
+        'mp3': 'mp3',
+        'wav': 'wav',
+        'aac': 'aac',
+        'flac': 'flac',
+        'ogg': 'ogg'
+    }
+    return format_to_extension.get(format_name.lower(), 'mp4')  # Default to mp4 if unknown
 
-GCP_BUCKET_NAME = os.environ.get("GCP_BUCKET_NAME")
-if not GCP_BUCKET_NAME:
-    logger.error("GCP_BUCKET_NAME environment variable is not set.")
-    raise ValueError("GCP_BUCKET_NAME environment variable is required.")
+def get_metadata(filename, metadata_requests, job_id):
+    metadata = {}
+    if metadata_requests.get('thumbnail'):
+        thumbnail_filename = f"{os.path.splitext(filename)[0]}_thumbnail.jpg"
+        thumbnail_command = [
+            'ffmpeg',
+            '-i', filename,
+            '-vf', 'select=eq(n\,0)',
+            '-vframes', '1',
+            thumbnail_filename
+        ]
+        try:
+            subprocess.run(thumbnail_command, check=True, capture_output=True, text=True)
+            if os.path.exists(thumbnail_filename):
+                metadata['thumbnail'] = thumbnail_filename  # Return local path instead of URL
+        except subprocess.CalledProcessError as e:
+            print(f"Thumbnail generation failed: {e.stderr}")
 
-def upload_file_to_gcs(local_path, destination_path):
-    """
-    Upload a file to Google Cloud Storage.
-    """
-    client = storage.Client()
-    bucket = client.bucket(GCP_BUCKET_NAME)
-    blob = bucket.blob(destination_path)
-    blob.upload_from_filename(local_path)
-    blob.make_public()
-    return blob.public_url
+    if metadata_requests.get('filesize'):
+        metadata['filesize'] = os.path.getsize(filename)
+
+    if metadata_requests.get('encoder') or metadata_requests.get('duration') or metadata_requests.get('bitrate'):
+        ffprobe_command = [
+            'ffprobe',
+            '-v', 'quiet',
+            '-print_format', 'json',
+            '-show_format',
+            '-show_streams',
+            filename
+        ]
+        result = subprocess.run(ffprobe_command, capture_output=True, text=True)
+        probe_data = json.loads(result.stdout)
+        
+        if metadata_requests.get('duration'):
+            metadata['duration'] = float(probe_data['format']['duration'])
+        if metadata_requests.get('bitrate'):
+            metadata['bitrate'] = int(probe_data['format']['bit_rate'])
+        
+        if metadata_requests.get('encoder'):
+            metadata['encoder'] = {}
+            for stream in probe_data['streams']:
+                if stream['codec_type'] == 'video':
+                    metadata['encoder']['video'] = stream.get('codec_name', 'unknown')
+                elif stream['codec_type'] == 'audio':
+                    metadata['encoder']['audio'] = stream.get('codec_name', 'unknown')
+
+    return metadata
 
 def process_ffmpeg_compose(data, job_id):
-    """
-    Process FFmpeg composition requests, handling inputs, filters, and outputs.
-    """
     output_filenames = []
+    
+    # Build FFmpeg command
     command = ["ffmpeg"]
-
+    
     # Add global options
     for option in data.get("global_options", []):
         command.append(option["option"])
         if "argument" in option and option["argument"] is not None:
             command.append(str(option["argument"]))
-
+    
     # Add inputs
-    for input_item in data["inputs"]:
-        file_url = input_item["file_url"]
-        input_path = download_file(file_url, STORAGE_PATH)
-        if not os.path.exists(input_path):
-            logger.error(f"Input file {input_path} could not be downloaded or does not exist.")
-            raise FileNotFoundError(f"Input file {input_path} not found.")
+    for input_data in data["inputs"]:
+        if "options" in input_data:
+            for option in input_data["options"]:
+                command.append(option["option"])
+                if "argument" in option and option["argument"] is not None:
+                    command.append(str(option["argument"]))
+        input_path = download_file(input_data["file_url"], STORAGE_PATH)
         command.extend(["-i", input_path])
-
+    
     # Add filters
-    if "filters" in data:
+    if data.get("filters"):
         filter_complex = ";".join(filter_obj["filter"] for filter_obj in data["filters"])
         command.extend(["-filter_complex", filter_complex])
-
+    
     # Add outputs
     for i, output in enumerate(data["outputs"]):
-        format_option = next((opt for opt in output["options"] if opt["option"] == "-f"), None)
-        format_name = format_option["argument"] if format_option else "mp4"
-        file_extension = format_name if format_name != "image2" else "png"
-
-        if format_name == "image2":
-            output_path = os.path.join(STORAGE_PATH, f"{job_id}_output_{i}_%03d.{file_extension}")
-        else:
-            output_path = os.path.join(STORAGE_PATH, f"{job_id}_output_{i}.{file_extension}")
-
-        output_filenames.append(output_path)
-
-        for opt in output["options"]:
-            command.append(opt["option"])
-            if "argument" in opt and opt["argument"]:
-                command.append(str(opt["argument"]))
-        command.append(output_path)
-
+        format_name = None
+        for option in output["options"]:
+            if option["option"] == "-f":
+                format_name = option.get("argument")
+                break
+        
+        extension = get_extension_from_format(format_name) if format_name else 'mp4'
+        output_filename = os.path.join(STORAGE_PATH, f"{job_id}_output_{i}.{extension}")
+        output_filenames.append(output_filename)
+        
+        for option in output["options"]:
+            command.append(option["option"])
+            if "argument" in option and option["argument"] is not None:
+                command.append(str(option["argument"]))
+        command.append(output_filename)
+    
     # Execute FFmpeg command
     try:
-        logger.info(f"Executing FFmpeg command: {' '.join(command)}")
-        result = subprocess.run(command, check=True, capture_output=True, text=True)
-        logger.info(f"FFmpeg stdout: {result.stdout}")
-        if result.stderr:
-            logger.warning(f"FFmpeg stderr: {result.stderr}")
+        subprocess.run(command, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg failed with error: {e.stderr}")
-        raise RuntimeError(f"FFmpeg failed: {e.stderr}")
-
-    # Validate and gather output files
-    matching_files = []
-    for output_pattern in output_filenames:
-        if "%03d" in output_pattern:  # Handle sequences
-            sequence_files = glob.glob(output_pattern.replace("%03d", "*"))
-            matching_files.extend(sequence_files)
-        elif os.path.exists(output_pattern):
-            matching_files.append(output_pattern)
-
-    if not matching_files:
-        logger.error(f"No output files found for job {job_id}.")
-        raise FileNotFoundError(f"No output files found for job {job_id}.")
-
-    # Upload files to GCS
-    uploaded_files = []
-    for local_path in matching_files:
-        destination_path = os.path.basename(local_path)
-        gcs_path = upload_file_to_gcs(local_path, destination_path)
-        uploaded_files.append(gcs_path)
-        os.remove(local_path)
-
-    return uploaded_files
+        raise Exception(f"FFmpeg command failed: {e.stderr}")
+    
+    # Clean up input files
+    for input_data in data["inputs"]:
+        input_path = os.path.join(STORAGE_PATH, os.path.basename(input_data["file_url"]))
+        if os.path.exists(input_path):
+            os.remove(input_path)
+    
+    # Get metadata if requested
+    metadata = []
+    if data.get("metadata"):
+        for output_filename in output_filenames:
+            metadata.append(get_metadata(output_filename, data["metadata"], job_id))
+    
+    return output_filenames, metadata
