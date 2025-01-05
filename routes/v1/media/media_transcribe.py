@@ -2,6 +2,7 @@ from flask import Blueprint
 from app_utils import *
 import logging
 import os
+import yt_dlp
 from services.v1.media.media_transcribe import process_transcribe_media
 from services.authentication import authenticate
 from services.cloud_storage import upload_file
@@ -44,39 +45,53 @@ def transcribe(job_id, data):
     logger.info(f"Job {job_id}: Received transcription request for {media_url}")
 
     try:
-        result = process_transcribe_media(media_url, task, include_text, include_srt, include_segments, word_timestamps, response_type, language, job_id)
+        # Step 1: Download media using yt-dlp
+        temp_file_path = f"/tmp/{job_id}.media"
+        ydl_opts = {
+            'outtmpl': temp_file_path,
+            'format': 'bestaudio/best',  # Download best quality audio or video
+        }
+
+        logger.info(f"Job {job_id}: Downloading media from {media_url} using yt-dlp")
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([media_url])
+
+        # Step 2: Process transcription
+        logger.info(f"Job {job_id}: Starting transcription for {temp_file_path}")
+        result = process_transcribe_media(temp_file_path, task, include_text, include_srt, include_segments, word_timestamps, response_type, language, job_id)
+
+        # Step 3: Handle response
         logger.info(f"Job {job_id}: Transcription process completed successfully")
 
-        # If the result is a file path, upload it using the unified upload_file() method
         if response_type == "direct":
-           
             result_json = {
                 "text": result[0],
                 "srt": result[1],
                 "segments": result[2]
             }
+            return result_json, "/v1/media/transcribe", 200
 
-            return result_json, "/v1/transcribe/media", 200
-
-        else:
-
+        else:  # response_type == "cloud"
             cloud_urls = {
-                "text": upload_file(result[0]) if include_text is True else None,
-                "srt": upload_file(result[1]) if include_srt is True else None,
-                "segments": upload_file(result[2]) if include_segments is True else None,
+                "text": upload_file(result[0]) if include_text else None,
+                "srt": upload_file(result[1]) if include_srt else None,
+                "segments": upload_file(result[2]) if include_segments else None,
             }
 
-            if include_text is True:
-                os.remove(result[0])  # Remove the temporary file after uploading
-            
-            if include_srt is True:
+            # Clean up temporary files
+            if include_text and result[0]:
+                os.remove(result[0])
+            if include_srt and result[1]:
                 os.remove(result[1])
-
-            if include_segments is True:
+            if include_segments and result[2]:
                 os.remove(result[2])
-            
-            return cloud_urls, "/v1/transcribe/media", 200
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+
+            return cloud_urls, "/v1/media/transcribe", 200
 
     except Exception as e:
         logger.error(f"Job {job_id}: Error during transcription process - {str(e)}")
-        return str(e), "/v1/transcribe/media", 500
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        return str(e), "/v1/media/transcribe", 500
