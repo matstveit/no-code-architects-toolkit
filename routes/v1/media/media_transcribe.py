@@ -44,23 +44,35 @@ def transcribe(job_id, data):
 
     logger.info(f"Job {job_id}: Received transcription request for {media_url}")
 
+    temp_file_path = f"/tmp/{job_id}.mp4"
     try:
         # Step 1: Download media using yt-dlp
-        temp_file_path = f"/tmp/{job_id}.media"
         ydl_opts = {
-            'outtmpl': temp_file_path,
-            'format': 'bestaudio/best',  # Download best quality audio or video
+            'outtmpl': temp_file_path,  # Output file path
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',  # Force MP4 format
+            'postprocessors': [
+                {   # Ensure remux to MP4 if original format is different
+                    'key': 'FFmpegVideoConvertor',
+                    'preferedformat': 'mp4'
+                }
+            ]
         }
 
-        logger.info(f"Job {job_id}: Downloading media from {media_url} using yt-dlp")
+        logger.info(f"Job {job_id}: Downloading media from {media_url} in MP4 format using yt-dlp")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([media_url])
 
-        # Step 2: Process transcription
-        logger.info(f"Job {job_id}: Starting transcription for {temp_file_path}")
-        result = process_transcribe_media(temp_file_path, task, include_text, include_srt, include_segments, word_timestamps, response_type, language, job_id)
+        # Step 2: Upload downloaded MP4 file to cloud storage
+        logger.info(f"Job {job_id}: Uploading MP4 file to cloud storage")
+        uploaded_file_url = upload_file(temp_file_path)
 
-        # Step 3: Handle response
+        logger.info(f"Job {job_id}: MP4 file uploaded successfully to {uploaded_file_url}")
+
+        # Step 3: Process transcription
+        logger.info(f"Job {job_id}: Starting transcription for {uploaded_file_url}")
+        result = process_transcribe_media(uploaded_file_url, task, include_text, include_srt, include_segments, word_timestamps, response_type, language, job_id)
+
+        # Step 4: Handle response
         logger.info(f"Job {job_id}: Transcription process completed successfully")
 
         if response_type == "direct":
@@ -78,7 +90,7 @@ def transcribe(job_id, data):
                 "segments": upload_file(result[2]) if include_segments else None,
             }
 
-            # Clean up temporary files
+            # Clean up transcription result files
             if include_text and result[0]:
                 os.remove(result[0])
             if include_srt and result[1]:
