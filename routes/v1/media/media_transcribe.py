@@ -44,21 +44,22 @@ def transcribe(job_id, data):
 
     logger.info(f"Job {job_id}: Received transcription request for {media_url}")
 
-    temp_file_path = f"/tmp/{job_id}.mp4"
+    temp_file_path = f"/tmp/{job_id}"  # Use %(ext)s so yt-dlp can insert the correct extension
     try:
         # Step 1: Download media using yt-dlp
         ydl_opts = {
-            'outtmpl': temp_file_path,  # Output file path
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',  # Force MP4 format
-            'postprocessors': [
-                {   # Ensure remux to MP4 if original format is different
-                    'key': 'FFmpegVideoConvertor',
-                    'preferedformat': 'mp4'
-                }
-            ]
+            'outtmpl': temp_file_path,
+            'format': 'bestaudio/best',  # Only download the best audio stream
+            'postprocessors': [{
+                # Extract the audio stream and convert it to FLAC
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'flac',  # or 'wav', 'm4a', 'mp3', etc.
+                'preferredquality': '0'    # '0' for lossless FLAC
+            }]
         }
 
-        logger.info(f"Job {job_id}: Downloading media from {media_url} in MP4 format using yt-dlp")
+        logger.info(f"Job {job_id}: Downloading best audio from {media_url} as FLAC")
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([media_url])
 
@@ -69,8 +70,8 @@ def transcribe(job_id, data):
         #logger.info(f"Job {job_id}: MP4 file uploaded successfully to {uploaded_file_url}")
 
         # Step 3: Process transcription
-        logger.info(f"Job {job_id}: Starting transcription for {temp_file_path}")
-        result = process_transcribe_media(temp_file_path, task, include_text, include_srt, include_segments, word_timestamps, response_type, language, job_id)
+        logger.info(f"Job {job_id}: Starting transcription for {temp_file_path}.flac")
+        result = process_transcribe_media(f"{temp_file_path}.flac", task, include_text, include_srt, include_segments, word_timestamps, response_type, language, job_id)
 
         # Step 4: Handle response
         logger.info(f"Job {job_id}: Transcription process completed successfully")
