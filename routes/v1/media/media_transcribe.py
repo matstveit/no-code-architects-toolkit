@@ -63,14 +63,14 @@ def transcribe(job_id, data):
             ydl.download([media_url])
 
         # Step 2: Upload downloaded MP4 file to cloud storage
-        logger.info(f"Job {job_id}: Uploading MP4 file to cloud storage")
-        uploaded_file_url = upload_file(temp_file_path)
+        #logger.info(f"Job {job_id}: Uploading MP4 file to cloud storage")
+        #uploaded_file_url = upload_file(temp_file_path)
 
-        logger.info(f"Job {job_id}: MP4 file uploaded successfully to {uploaded_file_url}")
+        #logger.info(f"Job {job_id}: MP4 file uploaded successfully to {uploaded_file_url}")
 
         # Step 3: Process transcription
-        logger.info(f"Job {job_id}: Starting transcription for {uploaded_file_url}")
-        result = process_transcribe_media(uploaded_file_url, task, include_text, include_srt, include_segments, word_timestamps, response_type, language, job_id)
+        logger.info(f"Job {job_id}: Starting transcription for {temp_file_path}")
+        result = process_transcribe_media(temp_file_path, task, include_text, include_srt, include_segments, word_timestamps, response_type, language, job_id)
 
         # Step 4: Handle response
         logger.info(f"Job {job_id}: Transcription process completed successfully")

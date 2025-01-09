@@ -16,8 +16,8 @@ STORAGE_PATH = "/tmp/"
 def process_transcribe_media(media_url, task, include_text, include_srt, include_segments, word_timestamps, response_type, language, job_id):
     """Transcribe or translate media and return the transcript/translation, SRT or VTT file path."""
     logger.info(f"Starting {task} for media URL: {media_url}")
-    input_filename = download_file(media_url, os.path.join(STORAGE_PATH, 'input_media'))
-    logger.info(f"Downloaded media to local file: {input_filename}")
+    #input_filename = download_file(media_url, os.path.join(STORAGE_PATH, 'input_media'))
+    #logger.info(f"Downloaded media to local file: {input_filename}")
 
     try:
         # Load a larger model for better translation quality
@@ -37,7 +37,7 @@ def process_transcribe_media(media_url, task, include_text, include_srt, include
         if language:
             options["language"] = language
 
-        result = model.transcribe(input_filename, **options)
+        result = model.transcribe(media_url, **options)
         
         # For translation task, the result['text'] will be in English
         text = None
@@ -63,8 +63,8 @@ def process_transcribe_media(media_url, task, include_text, include_srt, include
         if include_segments is True:
             segments_json = result['segments']
 
-        os.remove(input_filename)
-        logger.info(f"Removed local file: {input_filename}")
+        os.remove(media_url)
+        logger.info(f"Removed local file: {media_url}")
         logger.info(f"{task.capitalize()} successful, output type: {response_type}")
 
         if response_type == "direct":
