@@ -4,11 +4,29 @@ import logging
 import os
 import base64
 import yt_dlp
+import subprocess  # For ffprobe
 from services.authentication import authenticate
 from services.cloud_storage import upload_file
 
 v1_media_download_bp = Blueprint('v1_media_download', __name__)
 logger = logging.getLogger(__name__)
+
+def get_duration(file_path):
+    """
+    Uses ffprobe to extract the duration of a media file.
+    """
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-i', file_path, '-show_entries', 'format=duration', '-v', 'quiet', '-of', 'csv=p=0'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        duration = float(result.stdout.strip())
+        return duration
+    except Exception as e:
+        logger.error(f"Error getting duration for file {file_path}: {e}")
+        return None
 
 @v1_media_download_bp.route('/v1/media/download', methods=['POST'])
 @authenticate
@@ -33,15 +51,15 @@ logger = logging.getLogger(__name__)
 def download(job_id, data):
     """
     Handles uploading multiple audio files (Base64) or downloading multiple video files from media URLs.
-    Returns the uploaded file URLs based on what was processed.
+    Returns the uploaded file URLs and durations.
     """
     audio_data_list = data.get('audio_data_list')  # Optional list of Base64-encoded audio data
     media_url_list = data.get('media_url_list')  # Optional list of media URLs
     webhook_url = data.get('webhook_url')  # Optional webhook for updates
     id = data.get('id')  # Optional job ID
 
-    uploaded_audio_urls = []
-    uploaded_video_urls = []
+    uploaded_audio_results = []
+    uploaded_video_results = []
 
     try:
         # Process audio data list
@@ -58,10 +76,16 @@ def download(job_id, data):
 
                     logger.info(f"Job {job_id}: Audio data saved as {temp_audio_file_path}")
 
+                    # Get duration of the audio file
+                    duration = get_duration(temp_audio_file_path)
+
                     # Upload the audio file to cloud storage
                     uploaded_audio_url = upload_file(temp_audio_file_path)
-                    uploaded_audio_urls.append(uploaded_audio_url)
-                    logger.info(f"Job {job_id}: Uploaded audio file {index + 1}/{len(audio_data_list)}: {uploaded_audio_url}")
+                    uploaded_audio_results.append({
+                        "url": uploaded_audio_url,
+                        "duration": duration
+                    })
+                    logger.info(f"Job {job_id}: Uploaded audio file {index + 1}/{len(audio_data_list)}: {uploaded_audio_url}, Duration: {duration} seconds")
 
                 finally:
                     # Cleanup temporary audio file
@@ -87,10 +111,16 @@ def download(job_id, data):
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         ydl.download([media_url])
 
+                    # Get duration of the video file
+                    duration = get_duration(temp_video_file_path)
+
                     # Upload the video file to cloud storage
                     uploaded_video_url = upload_file(temp_video_file_path)
-                    uploaded_video_urls.append(uploaded_video_url)
-                    logger.info(f"Job {job_id}: Uploaded video file {index + 1}/{len(media_url_list)}: {uploaded_video_url}")
+                    uploaded_video_results.append({
+                        "url": uploaded_video_url,
+                        "duration": duration
+                    })
+                    logger.info(f"Job {job_id}: Uploaded video file {index + 1}/{len(media_url_list)}: {uploaded_video_url}, Duration: {duration} seconds")
 
                 finally:
                     # Cleanup temporary video file
@@ -100,8 +130,8 @@ def download(job_id, data):
         # Return response
         return {
             "message": "Media files processed successfully.",
-            "uploaded_audio_urls": uploaded_audio_urls,
-            "uploaded_video_urls": uploaded_video_urls
+            "uploaded_audio_results": uploaded_audio_results,
+            "uploaded_video_results": uploaded_video_results
         }, "/v1/media/download", 200
 
     except Exception as e:
